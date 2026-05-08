@@ -95,47 +95,27 @@ def find_latest_jsonl() -> Optional[Path]:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def _classify_event(raw_line: str) -> str:
-    """Return 'terminal' | 'alive' | 'ignore' for one transcript line.
-
-    'terminal' — assistant message whose stop_reason ends the turn (end_turn,
-    max_tokens, stop_sequence, refusal). The Stop hook fires shortly after
-    these too, but reading them here lets the bed silence the moment the
-    JSONL line lands rather than waiting for the hook.
-
-    'alive' — assistant entry with stop_reason='tool_use' (paused for tool),
-    sub-agent intermediate output (stop_reason=None), or any 'user' entry
-    (tool_result coming back, or a fresh prompt). Bumps the alive window.
-
-    'ignore' — system/attachment/file-history-snapshot entries. Some of
-    these (system stop_hook_summary) land AFTER the Stop hook fires; if we
-    treated them as alive they'd reignite the bed across the end-of-turn
-    boundary.
+def _is_alive_signal(raw_line: str) -> bool:
+    """True if this transcript entry means claude is actively working.
+    Excludes system/attachment/file-history-snapshot entries — some of those
+    (system stop_hook_summary) land AFTER the Stop hook has run, and would
+    otherwise re-extend the alive window across the end-of-turn boundary
+    (the synth's _muted flag handles this race regardless, but filtering
+    here is cheap insurance).
     """
     try:
         evt = json.loads(raw_line)
     except json.JSONDecodeError:
-        return "ignore"
-    if not isinstance(evt, dict):
-        return "ignore"
-    t = evt.get("type")
-    if t == "user":
-        return "alive"
-    if t != "assistant":
-        return "ignore"
-    sr = (evt.get("message") or {}).get("stop_reason")
-    # tool_use is the only stop_reason that promises more assistant content
-    # is still coming this turn. Sub-agent intermediate outputs have
-    # stop_reason=None and are also non-terminal.
-    if sr is None or sr == "tool_use":
-        return "alive"
-    return "terminal"
+        return False
+    return isinstance(evt, dict) and evt.get("type") in ("assistant", "user")
 
 
 async def session_watcher():
-    """Tail the active Claude Code session jsonl. Each line either bumps the
-    alive window (model still working / tool in flight) or extinguishes the
-    bed immediately (assistant message hit a terminal stop_reason)."""
+    """Tail the active Claude Code session jsonl. Each new assistant/user
+    line bumps the bed's alive window via touch_alive(). The Stop hook is
+    the authoritative end-of-turn signal; this watcher only keeps the bed
+    alive *during* a turn and provides a 60s backstop for the case where
+    no Stop hook fires (Esc interrupt, process crash)."""
     current: Optional[Path] = None
     f = None
     try:
@@ -150,12 +130,8 @@ async def session_watcher():
                 print(f"[watch] tracking {target}", flush=True)
             line = f.readline() if f else None
             if line:
-                if _synth is not None:
-                    kind = _classify_event(line)
-                    if kind == "alive":
-                        _synth.touch_alive()
-                    elif kind == "terminal":
-                        _synth.extinguish()
+                if _synth is not None and _is_alive_signal(line):
+                    _synth.touch_alive()
             else:
                 if f:
                     f.seek(f.tell())
