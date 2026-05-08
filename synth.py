@@ -209,7 +209,10 @@ class Synth:
         # holds a floor gain and we self-trigger random crackles so the fire
         # sounds continuous instead of going silent between content blocks.
         self._alive_until: float = 0.0       # epoch deadline; before now() = idle
-        self._alive_decay_seconds: float = 3.0
+        # Tight decay so an Esc interrupt — which doesn't fire any hook in
+        # Claude Code — silences the bed within ~1s of the last JSONL line.
+        # Shorter than this risks flicker mid-turn during long tool calls.
+        self._alive_decay_seconds: float = 0.8
         self._next_auto_crackle: float = 0.0  # next epoch-time auto-fire
         self._sample_clock: int = 0           # frames produced (for callback timing)
         self._muted: bool = True              # extinguish→True, ignite→False;
