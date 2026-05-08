@@ -1,0 +1,6 @@
+{
+  "microwave_running.wav": {
+    "intro": "intros/microwave_start.wav",
+    "outro": "chimes/microwave_bell.mp3"
+  }
+}
