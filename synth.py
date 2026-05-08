@@ -209,10 +209,12 @@ class Synth:
         # holds a floor gain and we self-trigger random crackles so the fire
         # sounds continuous instead of going silent between content blocks.
         self._alive_until: float = 0.0       # epoch deadline; before now() = idle
-        # Tight decay so an Esc interrupt — which doesn't fire any hook in
-        # Claude Code — silences the bed within ~1s of the last JSONL line.
-        # Shorter than this risks flicker mid-turn during long tool calls.
-        self._alive_decay_seconds: float = 0.8
+        # Esc interrupts don't fire any hook in Claude Code, so the only
+        # interrupt signal we have is "JSONL went quiet for N seconds." This
+        # value sets that tail. Empirically, JSONL gaps of 2–5s are routine
+        # during normal generation (model thinking between tool calls), so
+        # going much below ~5s causes audible mid-turn flicker.
+        self._alive_decay_seconds: float = 5.0
         self._next_auto_crackle: float = 0.0  # next epoch-time auto-fire
         self._sample_clock: int = 0           # frames produced (for callback timing)
         self._muted: bool = True              # extinguish→True, ignite→False;
