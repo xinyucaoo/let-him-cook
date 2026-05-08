@@ -209,12 +209,14 @@ class Synth:
         # holds a floor gain and we self-trigger random crackles so the fire
         # sounds continuous instead of going silent between content blocks.
         self._alive_until: float = 0.0       # epoch deadline; before now() = idle
-        # Esc interrupts don't fire any hook in Claude Code, so the only
-        # interrupt signal we have is "JSONL went quiet for N seconds." This
-        # value sets that tail. Empirically, JSONL gaps of 2–5s are routine
-        # during normal generation (model thinking between tool calls), so
-        # going much below ~5s causes audible mid-turn flicker.
-        self._alive_decay_seconds: float = 5.0
+        # Long backstop: end-of-turn is now signalled semantically by the
+        # bridge (assistant entry with terminal stop_reason → extinguish),
+        # so this decay window only catches pathological cases where no
+        # terminal entry ever lands — typically an Esc interrupt, a process
+        # crash, or network failure. 60s is long enough that legitimate
+        # tool execution gaps don't trip it (most tools complete in <60s)
+        # and short enough that an interrupted turn doesn't hang forever.
+        self._alive_decay_seconds: float = 60.0
         self._next_auto_crackle: float = 0.0  # next epoch-time auto-fire
         self._sample_clock: int = 0           # frames produced (for callback timing)
         self._muted: bool = True              # extinguish→True, ignite→False;
