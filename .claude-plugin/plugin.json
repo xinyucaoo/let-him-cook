@@ -4,5 +4,8 @@
   "description": "Plays cooking sounds while Claude is working. Random sample on each turn — sizzle, kettle whistle, microwave with bell, chopping, etc.",
   "author": {
     "name": "xinyucao"
-  }
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/xinyucaoo/let-him-cook",
+  "repository": "https://github.com/xinyucaoo/let-him-cook"
 }

@@ -9,7 +9,7 @@ Plays cooking sounds while Claude is working. Random sample on each turn — pan
 In Claude Code:
 
 ```
-/plugin install <owner>/let-him-cook
+/plugin install xinyucaoo/let-him-cook
 ```
 
 That's it. On first activation the plugin auto-creates a local Python venv and installs three deps (`numpy`, `sounddevice`, `soundfile`). All three ship with their native libraries bundled in their wheels — no `brew install` needed on macOS, no `apt` needed on most Linux. First run takes ~10s; subsequent activations are instant.
@@ -43,6 +43,14 @@ Drop any `.mp3` / `.wav` / `.aiff` / `.flac` / `.ogg` into the plugin's `samples
 }
 ```
 
+## Known limitations
+
+The bridge listens on a fixed port (`127.0.0.1:8766`). Running two Claude Code sessions on the same machine will currently collide on that port — only the first session's bridge will start.
+
 ## Sample credits
 
 Cooking samples sourced from [BigSoundBank](https://bigsoundbank.com) (CC0) and [Pixabay](https://pixabay.com/sound-effects) (Pixabay license).
+
+## License
+
+[MIT](LICENSE). Sample audio is licensed separately — see "Sample credits" above.
