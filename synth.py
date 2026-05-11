@@ -262,8 +262,29 @@ class Synth:
         self._bg_len = self._bg_buffer.shape[0]
 
         self._stream: Optional[sd.OutputStream] = None
+        self._stream_lock = threading.Lock()
+        self._stop_device_watcher = threading.Event()
+        self._device_watcher_thread: Optional[threading.Thread] = None
 
     def start(self):
+        self._open_stream()
+        self._device_watcher_thread = threading.Thread(
+            target=self._device_watcher_loop, daemon=True
+        )
+        self._device_watcher_thread.start()
+
+    def stop(self):
+        self._stop_device_watcher.set()
+        with self._stream_lock:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+                self._stream = None
+
+    def _open_stream(self):
+        """Open and start the OutputStream against the current default device.
+        PortAudio binds to whatever the OS default output is at this moment;
+        _device_watcher_loop reopens on changes."""
         self._stream = sd.OutputStream(
             samplerate=SAMPLE_RATE,
             channels=1,
@@ -273,11 +294,46 @@ class Synth:
         )
         self._stream.start()
 
-    def stop(self):
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+    @staticmethod
+    def _current_output_device():
+        dev = sd.default.device
+        return dev[1] if isinstance(dev, (tuple, list)) else dev
+
+    def _device_watcher_loop(self):
+        """Reopen the OutputStream when the macOS default output device
+        changes — e.g., AirPods (dis)connect, headphones plugged in, etc.
+        PortAudio doesn't follow OS default-device changes on its own, so
+        without this the stream stays glued to whichever device was active
+        when the bridge started."""
+        try:
+            current = self._current_output_device()
+        except Exception:
+            current = None
+        while not self._stop_device_watcher.wait(2.0):
+            try:
+                new = self._current_output_device()
+            except Exception as e:
+                print(f"[synth] device query failed: {e}", flush=True)
+                continue
+            if new == current:
+                continue
+            print(f"[synth] output device changed ({current} → {new}); "
+                  f"reopening stream", flush=True)
+            with self._stream_lock:
+                if self._stream is not None:
+                    try:
+                        self._stream.stop()
+                        self._stream.close()
+                    except Exception as e:
+                        print(f"[synth] error closing old stream: {e}",
+                              flush=True)
+                    self._stream = None
+                try:
+                    self._open_stream()
+                except Exception as e:
+                    print(f"[synth] failed to open stream on new device: {e}",
+                          flush=True)
+            current = new
 
     def extinguish(self):
         """Snap the bed out — bg snaps to silence and any active chime plays
