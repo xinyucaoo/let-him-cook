@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s http://127.0.0.1:8766/ignite"
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/hook-curl.sh ignite"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s http://127.0.0.1:8766/extinguish"
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/hook-curl.sh extinguish"
           }
         ]
       }

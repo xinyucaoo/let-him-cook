@@ -25,10 +25,15 @@ from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
 PROJECTS_DIR = Path(os.path.expanduser("~/.claude/projects"))
+# Where the bridge advertises its currently-listening port. Hooks and skills
+# read from this file via bin/hook-curl.sh (or inline cat) so the actual
+# port can be anything — picking an ephemeral one means we coexist with
+# whatever else may already be on the previously-hardcoded 8766.
+PORT_FILE = Path.home() / ".cache" / "let-him-cook" / "port"
 _synth = None  # type: ignore[var-annotated]
 
 
-def start_control_http(port: int = 8766):
+def start_control_http(port: int = 0):
     class Handler(BaseHTTPRequestHandler):
         def _ok(self, body: bytes = b"OK", content_type: str = "text/plain"):
             self.send_response(200)
@@ -83,8 +88,12 @@ def start_control_http(port: int = 8766):
             pass
 
     server = HTTPServer(("127.0.0.1", port), Handler)
+    actual_port = server.server_port  # resolves the OS-picked port if port=0
+    PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PORT_FILE.write_text(str(actual_port))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"[bridge] control http on http://127.0.0.1:{port}")
+    print(f"[bridge] control http on http://127.0.0.1:{actual_port} "
+          f"(port file: {PORT_FILE})")
     return server
 
 
@@ -208,6 +217,10 @@ async def main():
         await session_watcher()
     finally:
         _synth.stop()
+        try:
+            PORT_FILE.unlink()
+        except FileNotFoundError:
+            pass
 
 
 if __name__ == "__main__":
