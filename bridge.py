@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """bridge.py — let-him-cook audio bridge.
 
-Holds a single output audio stream and tails the active Claude Code session
-JSONL to keep the bed alive while the assistant is working. Hooks ping the
-HTTP control endpoint:
+Holds the audio output stream and tails the JSONL of whichever Claude Code
+session most recently fired its UserPromptSubmit hook. Hooks pass the
+transcript path as a query param so we tail one specific session — never
+the latest-anywhere — which is how cross-session audio bleed is avoided.
 
-    GET /ignite                       — start the bed
-    GET /extinguish                   — stop the bed (Stop hook)
+HTTP control endpoints:
+
+    GET /ignite?transcript=<path>     — start the bed, scope to one session
+    GET /extinguish?transcript=<path> — stop the bed (matching session only)
     GET /reset                        — silence + rewind to frame 0
     GET /samples                      — JSON list of pool basenames
     GET /mode/random                  — random pick on each ignite
@@ -29,7 +32,26 @@ from urllib.parse import urlparse, parse_qs
 # port can be anything — picking an ephemeral one means we coexist with
 # whatever else may already be on the previously-hardcoded 8766.
 PORT_FILE = Path.home() / ".cache" / "let-him-cook" / "port"
+
+# Path to the transcript JSONL of the session currently driving audio.
+# Set by /ignite, used by session_watcher_loop to know which file to tail.
+# Protected by _active_lock for safe handoff between the HTTP thread and
+# the watcher coroutine.
+_active_transcript: Optional[Path] = None
+_active_lock = threading.Lock()
+
 _synth = None  # type: ignore[var-annotated]
+
+
+def _set_active_transcript(path: Optional[Path]) -> None:
+    global _active_transcript
+    with _active_lock:
+        _active_transcript = path
+
+
+def _get_active_transcript() -> Optional[Path]:
+    with _active_lock:
+        return _active_transcript
 
 
 def start_control_http(port: int = 0):
@@ -45,17 +67,27 @@ def start_control_http(port: int = 0):
             path = url.path
             qs = parse_qs(url.query)
             if path == "/extinguish":
-                if _synth is not None:
+                # Scope: only extinguish when the Stop hook fires *for the
+                # session that lit the bed*. Without this scoping, a Stop in
+                # session B would silence session A's audio when A is still
+                # the active one.
+                t = (qs.get("transcript") or [""])[0]
+                active = _get_active_transcript()
+                if _synth is not None and (
+                    not t or not active or Path(t) == active
+                ):
                     _synth.extinguish()
                 self._ok()
             elif path == "/ignite":
-                # Wide window — covers any normal turn length without needing
-                # a JSONL-based heartbeat. The Stop hook is the authoritative
-                # silence signal; if it doesn't fire (Esc interrupt), the bed
-                # plays out the full 600s tail before going silent. Cost of
-                # not having an interrupt hook upstream.
+                # Tight initial buffer — the JSONL watcher takes over keeping
+                # the bed alive once transcript appends start landing. Without
+                # JSONL we'd silence 8s after the prompt; with JSONL, each
+                # append extends by _alive_decay_seconds (≈2s).
+                t = (qs.get("transcript") or [""])[0]
+                if t:
+                    _set_active_transcript(Path(t))
                 if _synth is not None:
-                    _synth.ignite(600)
+                    _synth.ignite(8)
                 self._ok()
             elif path == "/reset":
                 if _synth is not None:
@@ -96,6 +128,51 @@ def start_control_http(port: int = 0):
     print(f"[bridge] control http on http://127.0.0.1:{actual_port} "
           f"(port file: {PORT_FILE})")
     return server
+
+
+def _is_alive_signal(raw_line: str) -> bool:
+    """True for assistant/user transcript entries; false for system/etc.
+    Same filter as before — keeps end-of-turn races (system stop_hook_summary
+    entries that land after the Stop hook) from re-extending the bed."""
+    try:
+        evt = json.loads(raw_line)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(evt, dict) and evt.get("type") in ("assistant", "user")
+
+
+async def session_watcher_loop():
+    """Tail _active_transcript when set. Each new assistant/user line bumps
+    the bed's alive window via touch_alive(), which uses the synth's
+    _alive_decay_seconds (~2s) — so after the last JSONL append (turn
+    finishes OR user presses Esc), the bed silences within that window.
+
+    Reopens the tail handle whenever _active_transcript changes (i.e.,
+    a different session's UserPromptSubmit hook fires)."""
+    current_path: Optional[Path] = None
+    f = None
+    try:
+        while True:
+            target = _get_active_transcript()
+            if target != current_path:
+                if f:
+                    f.close()
+                    f = None
+                if target is not None and target.exists():
+                    f = target.open("r")
+                    f.seek(0, 2)  # tail from end
+                current_path = target
+            line = f.readline() if f else None
+            if line:
+                if _synth is not None and _is_alive_signal(line):
+                    _synth.touch_alive()
+            else:
+                if f:
+                    f.seek(f.tell())
+                await asyncio.sleep(0.2)
+    finally:
+        if f:
+            f.close()
 
 
 async def main():
@@ -161,17 +238,8 @@ async def main():
           flush=True)
     start_control_http()
 
-    # No JSONL tailing anymore. Previously the bridge tailed whichever Claude
-    # Code session's transcript was most recently modified across the whole
-    # machine, then called touch_alive() on every assistant/user line. With
-    # multiple parallel sessions that meant any background Claude appending
-    # to its JSONL kept the bed alive — audible cross-session bleed. The
-    # bridge is now purely hook-driven: /ignite buys 600s, /extinguish kills
-    # instantly. We just sit here keeping the HTTP server and audio thread
-    # alive forever.
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await session_watcher_loop()
     finally:
         _synth.stop()
         try:

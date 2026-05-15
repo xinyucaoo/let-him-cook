@@ -209,14 +209,13 @@ class Synth:
         # holds a floor gain and we self-trigger random crackles so the fire
         # sounds continuous instead of going silent between content blocks.
         self._alive_until: float = 0.0       # epoch deadline; before now() = idle
-        # Long backstop: end-of-turn is now signalled semantically by the
-        # bridge (assistant entry with terminal stop_reason → extinguish),
-        # so this decay window only catches pathological cases where no
-        # terminal entry ever lands — typically an Esc interrupt, a process
-        # crash, or network failure. 60s is long enough that legitimate
-        # tool execution gaps don't trip it (most tools complete in <60s)
-        # and short enough that an interrupted turn doesn't hang forever.
-        self._alive_decay_seconds: float = 60.0
+        # Tight decay: each JSONL append from the active session extends the
+        # bed by this much. When the user presses Esc (no Stop hook fires,
+        # no more JSONL appends), the bed silences within this window. Small
+        # value here is what makes Esc feel responsive; the cost is that any
+        # tool-execution gap longer than this would also silence the bed
+        # mid-turn until the next append. Tunable.
+        self._alive_decay_seconds: float = 2.0
         self._next_auto_crackle: float = 0.0  # next epoch-time auto-fire
         self._sample_clock: int = 0           # frames produced (for callback timing)
         self._muted: bool = True              # extinguish→True, ignite→False;
