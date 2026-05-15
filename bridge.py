@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
-PROJECTS_DIR = Path(os.path.expanduser("~/.claude/projects"))
 # Where the bridge advertises its currently-listening port. Hooks and skills
 # read from this file via bin/hook-curl.sh (or inline cat) so the actual
 # port can be anything — picking an ephemeral one means we coexist with
@@ -50,11 +49,13 @@ def start_control_http(port: int = 0):
                     _synth.extinguish()
                 self._ok()
             elif path == "/ignite":
-                # Tight bootstrap window — JSONL appends via touch_alive() carry
-                # the rest of the turn. Manual interrupts (which don't fire the
-                # Stop hook) silence the bed within ~3s of the last JSONL event.
+                # Wide window — covers any normal turn length without needing
+                # a JSONL-based heartbeat. The Stop hook is the authoritative
+                # silence signal; if it doesn't fire (Esc interrupt), the bed
+                # plays out the full 600s tail before going silent. Cost of
+                # not having an interrupt hook upstream.
                 if _synth is not None:
-                    _synth.ignite(6)
+                    _synth.ignite(600)
                 self._ok()
             elif path == "/reset":
                 if _synth is not None:
@@ -95,66 +96,6 @@ def start_control_http(port: int = 0):
     print(f"[bridge] control http on http://127.0.0.1:{actual_port} "
           f"(port file: {PORT_FILE})")
     return server
-
-
-def find_latest_jsonl() -> Optional[Path]:
-    candidates = list(PROJECTS_DIR.glob("*/*.jsonl"))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
-
-
-def _is_alive_signal(raw_line: str) -> bool:
-    """True if this transcript entry means claude is actively working.
-    Excludes system/attachment/file-history-snapshot entries — some of those
-    (system stop_hook_summary) land AFTER the Stop hook has run, and would
-    otherwise re-extend the alive window across the end-of-turn boundary
-    (the synth's _muted flag handles this race regardless, but filtering
-    here is cheap insurance).
-    """
-    try:
-        evt = json.loads(raw_line)
-    except json.JSONDecodeError:
-        return False
-    return isinstance(evt, dict) and evt.get("type") in ("assistant", "user")
-
-
-async def session_watcher():
-    """Tail the active Claude Code session jsonl. Each new assistant/user
-    line bumps the bed's alive window via touch_alive(). The Stop hook is
-    the authoritative end-of-turn signal; this watcher only keeps the bed
-    alive *during* a turn and provides a 60s backstop for the case where
-    no Stop hook fires (Esc interrupt, process crash)."""
-    current: Optional[Path] = None
-    f = None
-    try:
-        while True:
-            target = find_latest_jsonl()
-            if target and target != current:
-                if f:
-                    f.close()
-                f = target.open("r")
-                f.seek(0, 2)  # tail from end
-                is_initial = current is None
-                current = target
-                # Print only on first ever attach. Subsequent switches happen
-                # whenever ANY Claude Code session touches its JSONL — in a
-                # multi-session setup that flips constantly, and each stdout
-                # line is reported by Claude Code's plugin monitor as a
-                # distinct "Monitor event" notification, drowning the UI.
-                if is_initial:
-                    print(f"[watch] tracking {target}", flush=True)
-            line = f.readline() if f else None
-            if line:
-                if _synth is not None and _is_alive_signal(line):
-                    _synth.touch_alive()
-            else:
-                if f:
-                    f.seek(f.tell())
-                await asyncio.sleep(0.2)
-    finally:
-        if f:
-            f.close()
 
 
 async def main():
@@ -220,8 +161,17 @@ async def main():
           flush=True)
     start_control_http()
 
+    # No JSONL tailing anymore. Previously the bridge tailed whichever Claude
+    # Code session's transcript was most recently modified across the whole
+    # machine, then called touch_alive() on every assistant/user line. With
+    # multiple parallel sessions that meant any background Claude appending
+    # to its JSONL kept the bed alive — audible cross-session bleed. The
+    # bridge is now purely hook-driven: /ignite buys 600s, /extinguish kills
+    # instantly. We just sit here keeping the HTTP server and audio thread
+    # alive forever.
     try:
-        await session_watcher()
+        while True:
+            await asyncio.sleep(3600)
     finally:
         _synth.stop()
         try:
