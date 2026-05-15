@@ -15,7 +15,14 @@ In Claude Code, register the marketplace and install the plugin:
 
 (Both commands are needed — the first tells your Claude Code where to find the plugin, the second actually installs it.)
 
-On first activation the plugin auto-creates a local Python venv and installs three deps (`numpy`, `sounddevice`, `soundfile`). All three ship with their native libraries bundled in their wheels — no `brew install` needed on macOS, no `apt` needed on most Linux. First run takes ~10s; subsequent activations are instant.
+On first activation the plugin auto-creates a local Python venv and installs three deps (`numpy`, `sounddevice`, `soundfile`). The first run takes ~10s; subsequent activations are instant.
+
+**Requires local audio hardware.** This plugin plays sound through the host machine's speakers/headphones — it has to run somewhere with an actual audio output device. It will not produce sound in:
+- Cloud/remote Claude Code sandboxes (the audio would play on the server, not your laptop)
+- Headless Linux containers, CI runners, or SSH-into-server setups with no `/dev/snd`
+- Any environment without a PortAudio-compatible output device
+
+On Linux, `sounddevice`'s wheels do not bundle PortAudio — you'll need `sudo apt install libportaudio2` (or your distro's equivalent) before the bridge can open an output stream. macOS and Windows wheels bundle PortAudio, so no extra system install is needed there.
 
 ## How it works
 

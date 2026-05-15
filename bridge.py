@@ -150,6 +150,26 @@ async def main():
     global _synth
     from synth import Synth
 
+    # Preflight: refuse to start in environments with no audio output. This
+    # catches headless containers, CI runners, and remote/cloud Claude Code
+    # sandboxes — the plugin can only do anything useful on a host with
+    # actual speakers/headphones. Exiting cleanly here lets the plugin
+    # monitor surface "not supported on this host" instead of crashing
+    # later inside sd.OutputStream() with a less obvious error.
+    try:
+        import sounddevice as sd  # noqa: F401  (Synth pulls it in too)
+        outputs = [d for d in sd.query_devices() if d.get("max_output_channels", 0) > 0]
+    except Exception as e:
+        print(f"[let-him-cook] audio backend unavailable: {e}", file=sys.stderr)
+        print("[let-him-cook] this plugin requires local audio (PortAudio + an "
+              "output device). On Linux: apt install libportaudio2.", file=sys.stderr)
+        sys.exit(1)
+    if not outputs:
+        print("[let-him-cook] no audio output device available — plugin not "
+              "supported on this host (headless / remote sandbox).",
+              file=sys.stderr)
+        sys.exit(1)
+
     bed_dir = Path(args.bed_dir).expanduser()
     exts = {".mp3", ".wav", ".aiff", ".flac", ".ogg"}
     bed_samples = sorted(
