@@ -5,17 +5,25 @@
 #   e.g. hook-curl.sh ignite
 #        hook-curl.sh mode/fixed "sample=frying_pan_2.mp3"
 #
-# Silently no-ops if the bridge isn't running (no port file, empty port,
-# or curl fails). Hooks and skills both rely on this — never block a
-# user prompt or end-of-turn over a missing bridge.
-set -eu
+# Always exits 0 so a missing/stopped bridge never blocks a user prompt
+# or end-of-turn. Curl output is discarded so the hook contributes no
+# stdout to Claude Code (which would otherwise inject it back into the
+# prompt context for UserPromptSubmit hooks).
 PORT_FILE="${HOME}/.cache/let-him-cook/port"
-[ -r "$PORT_FILE" ] || exit 0
-PORT=$(cat "$PORT_FILE" 2>/dev/null || echo "")
-[ -n "$PORT" ] || exit 0
+if [ ! -r "$PORT_FILE" ]; then
+  exit 0
+fi
+PORT=$(cat "$PORT_FILE" 2>/dev/null || true)
+if [ -z "$PORT" ]; then
+  exit 0
+fi
 ENDPOINT="${1:-}"
-[ -n "$ENDPOINT" ] || exit 0
-QUERY="${2:-}"
+if [ -z "$ENDPOINT" ]; then
+  exit 0
+fi
 URL="http://127.0.0.1:${PORT}/${ENDPOINT}"
-[ -n "$QUERY" ] && URL="${URL}?${QUERY}"
-curl -s --max-time 2 "$URL" || true
+if [ -n "${2:-}" ]; then
+  URL="${URL}?${2}"
+fi
+curl -s --max-time 2 -o /dev/null "$URL" || true
+exit 0
