@@ -1,0 +1,19 @@
+{
+  "name": "let-him-cook",
+  "description": "Single-plugin marketplace for let-him-cook — cooking sounds while Claude is working.",
+  "owner": {
+    "name": "Xinyu Cao"
+  },
+  "plugins": [
+    {
+      "name": "let-him-cook",
+      "description": "Plays cooking sounds while Claude is working. Random sample on each turn — sizzle, kettle whistle, microwave with bell, chopping, etc.",
+      "version": "0.1.0",
+      "author": {
+        "name": "xinyucao"
+      },
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

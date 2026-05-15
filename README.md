@@ -6,13 +6,16 @@ Plays cooking sounds while Claude is working. Random sample on each turn — pan
 
 ## Install
 
-In Claude Code:
+In Claude Code, register the marketplace and install the plugin:
 
 ```
-/plugin install xinyucaoo/let-him-cook
+/plugin marketplace add xinyucaoo/let-him-cook
+/plugin install let-him-cook@let-him-cook
 ```
 
-That's it. On first activation the plugin auto-creates a local Python venv and installs three deps (`numpy`, `sounddevice`, `soundfile`). All three ship with their native libraries bundled in their wheels — no `brew install` needed on macOS, no `apt` needed on most Linux. First run takes ~10s; subsequent activations are instant.
+(Both commands are needed — the first tells your Claude Code where to find the plugin, the second actually installs it.)
+
+On first activation the plugin auto-creates a local Python venv and installs three deps (`numpy`, `sounddevice`, `soundfile`). All three ship with their native libraries bundled in their wheels — no `brew install` needed on macOS, no `apt` needed on most Linux. First run takes ~10s; subsequent activations are instant.
 
 ## How it works
 
