@@ -2,6 +2,6 @@
   {
     "name": "let-him-cook-bridge",
     "description": "Audio bridge that plays cooking sounds while Claude is working",
-    "command": "${CLAUDE_PLUGIN_DIR}/bin/run-bridge.sh"
+    "command": "${CLAUDE_PLUGIN_ROOT}/bin/run-bridge.sh"
   }
 ]
