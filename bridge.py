@@ -135,8 +135,15 @@ async def session_watcher():
                     f.close()
                 f = target.open("r")
                 f.seek(0, 2)  # tail from end
+                is_initial = current is None
                 current = target
-                print(f"[watch] tracking {target}", flush=True)
+                # Print only on first ever attach. Subsequent switches happen
+                # whenever ANY Claude Code session touches its JSONL — in a
+                # multi-session setup that flips constantly, and each stdout
+                # line is reported by Claude Code's plugin monitor as a
+                # distinct "Monitor event" notification, drowning the UI.
+                if is_initial:
+                    print(f"[watch] tracking {target}", flush=True)
             line = f.readline() if f else None
             if line:
                 if _synth is not None and _is_alive_signal(line):
