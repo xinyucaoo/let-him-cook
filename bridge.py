@@ -33,11 +33,22 @@ from urllib.parse import urlparse, parse_qs
 # whatever else may already be on the previously-hardcoded 8766.
 PORT_FILE = Path.home() / ".cache" / "let-him-cook" / "port"
 
+# When set, the bridge plays audio only for the locked session's hooks.
+# Persisted to disk so the choice survives bridge restarts.
+LOCK_FILE = Path.home() / ".cache" / "let-him-cook" / "locked-session"
+
 # Path to the transcript JSONL of the session currently driving audio.
 # Set by /ignite, used by session_watcher_loop to know which file to tail.
 # Protected by _active_lock for safe handoff between the HTTP thread and
 # the watcher coroutine.
 _active_transcript: Optional[Path] = None
+# The most recent transcript that fired /ignite, *regardless* of whether
+# audio actually played for it. /lock reads this to capture "the session
+# the user just invoked /let-him-cook:lock from."
+_last_ignite_transcript: Optional[Path] = None
+# If set, /ignite only plays audio for this transcript. Other sessions
+# can still fire their hooks — they just become silent no-ops.
+_locked_transcript: Optional[Path] = None
 _active_lock = threading.Lock()
 
 _synth = None  # type: ignore[var-annotated]
@@ -54,6 +65,31 @@ def _get_active_transcript() -> Optional[Path]:
         return _active_transcript
 
 
+def _load_locked_from_disk() -> None:
+    global _locked_transcript
+    try:
+        if LOCK_FILE.exists():
+            text = LOCK_FILE.read_text().strip()
+            if text:
+                _locked_transcript = Path(text)
+    except Exception:
+        pass
+
+
+def _save_locked_to_disk(path: Optional[Path]) -> None:
+    try:
+        if path is None:
+            try:
+                LOCK_FILE.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LOCK_FILE.write_text(str(path))
+    except Exception:
+        pass
+
+
 def start_control_http(port: int = 0):
     class Handler(BaseHTTPRequestHandler):
         def _ok(self, body: bytes = b"OK", content_type: str = "text/plain"):
@@ -63,6 +99,7 @@ def start_control_http(port: int = 0):
             self.wfile.write(body)
 
         def do_GET(self):
+            global _last_ignite_transcript, _locked_transcript
             url = urlparse(self.path)
             path = url.path
             qs = parse_qs(url.query)
@@ -84,11 +121,40 @@ def start_control_http(port: int = 0):
                 # JSONL we'd silence 8s after the prompt; with JSONL, each
                 # append extends by _alive_decay_seconds (≈2s).
                 t = (qs.get("transcript") or [""])[0]
-                if t:
-                    _set_active_transcript(Path(t))
-                if _synth is not None:
-                    _synth.ignite(8)
+                tp = Path(t) if t else None
+                with _active_lock:
+                    _last_ignite_transcript = tp
+                    locked = _locked_transcript
+                if locked is None or (tp is not None and tp == locked):
+                    if tp is not None:
+                        _set_active_transcript(tp)
+                    if _synth is not None:
+                        _synth.ignite(8)
+                # else: locked to another session — silently no-op so
+                # background sessions can't trigger audio in the foreground.
                 self._ok()
+            elif path == "/lock":
+                # Lock the bridge to the session whose hook most recently
+                # fired /ignite. The user invokes /let-him-cook:lock as a
+                # prompt, so its own UserPromptSubmit hook just set
+                # _last_ignite_transcript to their session's path.
+                with _active_lock:
+                    _locked_transcript = _last_ignite_transcript
+                    locked_now = _locked_transcript
+                _save_locked_to_disk(locked_now)
+                if locked_now is not None:
+                    self._ok(f"locked:{locked_now.name}".encode())
+                else:
+                    self._ok(b"no session to lock - try submitting a prompt first")
+            elif path == "/unlock":
+                with _active_lock:
+                    _locked_transcript = None
+                _save_locked_to_disk(None)
+                self._ok(b"unlocked")
+            elif path == "/lock-status":
+                with _active_lock:
+                    locked = _locked_transcript
+                self._ok((locked.name if locked else "unlocked").encode())
             elif path == "/reset":
                 if _synth is not None:
                     _synth.reset_position()
@@ -183,6 +249,10 @@ async def main():
 
     global _synth
     from synth import Synth
+
+    # Restore any prior lock from disk so a bridge restart doesn't drop
+    # the user's "audio only in this session" choice.
+    _load_locked_from_disk()
 
     # Preflight: refuse to start in environments with no audio output. This
     # catches headless containers, CI runners, and remote/cloud Claude Code
